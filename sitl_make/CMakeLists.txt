@@ -239,8 +239,23 @@ target_link_libraries(cf2 ${CMAKE_THREAD_LIBS_INIT} m)
 
 target_compile_options(cf2 PUBLIC -DCONFIG_DECK_FORCE -DCONFIG_ESTIMATOR_KALMAN -DCONFIG_ESTIMATOR_KALMAN_ENABLE -DCRAZYFLIE_FW -DCONFIG_PLATFORM_SITL -DARCH_64)
 target_compile_definitions(cf2 PUBLIC CONFIG_PLATFORM_SITL)
+
+# Check if linker supports --no-warn-rwx-segments (added in binutils 2.39)
+execute_process(
+  COMMAND ${CMAKE_LINKER} --help
+  OUTPUT_VARIABLE LINKER_HELP_OUTPUT
+  ERROR_QUIET
+)
+string(FIND "${LINKER_HELP_OUTPUT}" "--no-warn-rwx-segments" LINKER_SUPPORTS_NO_WARN_RWX)
+
+if(LINKER_SUPPORTS_NO_WARN_RWX GREATER -1)
+  set(NO_WARN_RWX_FLAG ",--no-warn-rwx-segments")
+else()
+  set(NO_WARN_RWX_FLAG "")
+endif()
+
 set_target_properties(
-  cf2 PROPERTIES LINK_FLAGS "-Wl,--gc-sections,-T${CMAKE_CURRENT_SOURCE_DIR}/log_param_linker.ld"
+  cf2 PROPERTIES LINK_FLAGS "-Wl,--gc-sections${NO_WARN_RWX_FLAG},-T${CMAKE_CURRENT_SOURCE_DIR}/log_param_linker.ld"
 )
 
 include(cmake/sitl_gazebo.cmake)
