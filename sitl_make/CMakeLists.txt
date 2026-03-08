@@ -117,6 +117,7 @@ set(SRCS
   ${CF2_SITL_SRCS_DIR}/hal/src/buzzer.c
   ${CF2_SITL_SRCS_DIR}/hal/src/storage.c
   ${CF2_SITL_SRCS_DIR}/hal/src/pm_sitl.c
+  ${CF2_SITL_SRCS_DIR}/hal/src/radiolink_sitl.c
 
   # ${CF2_SITL_SRCS_DIR}/deck/core/deck_drivers.c
   # ${CF2_SITL_SRCS_DIR}/deck/core/deck_info.c
