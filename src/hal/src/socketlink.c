@@ -92,7 +92,8 @@ static void socketlinkTask(void *param)
       recvlen = recvfrom(fd, p.raw, sizeof(p.raw), 0, (struct sockaddr *)&remaddr, &addrlen);
       if (recvlen > 0){
         p.size = recvlen - 1; // We remove the header size
-        xQueueSend(crtpPacketDelivery, &p, 0);
+        // xQueueSend(crtpPacketDelivery, &p, 0);
+        ASSERT(xQueueSend(crtpPacketDelivery, &p, 0) == pdPASS);
       } else {
         DEBUG_PRINT("error : %s \n" , strerror(errno));
       }
@@ -126,6 +127,10 @@ static int socketlinkSendPacket(CRTPPacket *p)
   dataSize = sendto(fd, socket_buff, dataSize, 0, (struct sockaddr *)&remaddr, addrlen);
   // DEBUG_PRINT("sending : port: %d channel: %d data:%d %d %d size: %d\n" , p->port , p->channel, p->data[0], p->data[1], p->data[2], p->size);
   // Shutdown if not able to send ???
+  if (dataSize < 0){
+    DEBUG_PRINT("error : %s \n" , strerror(errno));
+    return 0;
+  }
   return (dataSize > 0);
 }
 
@@ -167,6 +172,7 @@ void socketlinkInit()
 
   // Initialize destination address (gazebo handler server)
   memset((char *)&remaddr, 0, sizeof(remaddr));\
+  remaddr.sin_family = AF_INET;
   if (strcmp(address_host, "INADDR_ANY") == 0){
     remaddr.sin_addr.s_addr =  htonl(INADDR_ANY);
   } else if (inet_addr(address_host) == INADDR_NONE){
@@ -211,7 +217,7 @@ void socketlinkInit()
 
 
   // Create RX queue and start socketlink task
-  crtpPacketDelivery = xQueueCreate(5, sizeof(CRTPPacket));
+  crtpPacketDelivery = xQueueCreate(2000, sizeof(CRTPPacket));
   DEBUG_QUEUE_MONITOR_REGISTER(crtpPacketDelivery);
 
   xTaskCreate(socketlinkTask, USBLINK_TASK_NAME,
