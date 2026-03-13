@@ -8,6 +8,8 @@ static uint8_t bcLoco = 0;
 static uint8_t bcDWM1000 = 0;
 static uint8_t bcZRanger = 0;
 static uint8_t bcZRanger2 = 0;
+static uint8_t bcLedRing = 1;
+static uint8_t bcMultiranger = 1;
 
 PARAM_GROUP_START(deck)
 PARAM_ADD_CORE(PARAM_UINT8 | PARAM_RONLY, bcFlow, &bcFlow)
@@ -17,4 +19,6 @@ PARAM_ADD_CORE(PARAM_UINT8 | PARAM_RONLY, bcLoco, &bcLoco)
 PARAM_ADD_CORE(PARAM_UINT8 | PARAM_RONLY, bcDWM1000, &bcDWM1000)
 PARAM_ADD_CORE(PARAM_UINT8 | PARAM_RONLY, bcZRanger, &bcZRanger)
 PARAM_ADD_CORE(PARAM_UINT8 | PARAM_RONLY, bcZRanger2, &bcZRanger2)
+PARAM_ADD_CORE(PARAM_UINT8 | PARAM_RONLY, bcLedRing, &bcLedRing)
+PARAM_ADD_CORE(PARAM_UINT8 | PARAM_RONLY, bcMultiranger, &bcMultiranger)
 PARAM_GROUP_STOP(deck)

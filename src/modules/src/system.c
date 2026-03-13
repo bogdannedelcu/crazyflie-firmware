@@ -37,8 +37,8 @@
 #include "config.h"
 #include "param.h"
 #include "log.h"
-#ifndef CONFIG_PLATFORM_SITL
 #include "ledseq.h"
+#ifndef CONFIG_PLATFORM_SITL
 #include "pm.h"
 #endif
 
@@ -147,10 +147,10 @@ void systemInit(void)
   configblockInit();
   workerInit();
   buzzerInit();
+  ledseqInit();
   #ifndef CONFIG_PLATFORM_SITL
   storageInit();
   adcInit();
-  ledseqInit();
   pmInit();
   peerLocalizationInit();
   #endif
@@ -165,8 +165,8 @@ void systemInit(void)
 bool systemTest()
 {
   bool pass=isInit;
-  #ifndef CONFIG_PLATFORM_SITL
   pass &= ledseqTest();
+  #ifndef CONFIG_PLATFORM_SITL
   pass &= pmTest();
   #endif
   pass &= workerTest();
@@ -179,10 +179,8 @@ bool systemTest()
 void systemTask(void *arg)
 {
   bool pass = true;
-  #ifndef CONFIG_PLATFORM_SITL
   ledInit();
   ledSet(CHG_LED, 1);
-  #endif
 
 #ifdef CONFIG_DEBUG_QUEUE_MONITOR
   queueMonitorInit();
@@ -324,9 +322,9 @@ void systemTask(void *arg)
     systemStart();
     #ifndef CONFIG_PLATFORM_SITL
     soundSetEffect(SND_STARTUP);
+    #endif
     ledseqRun(&seq_alive);
     ledseqRun(&seq_testPassed);
-    #endif
   }
   else
   {
@@ -335,9 +333,7 @@ void systemTask(void *arg)
     {
       while(1)
       {
-        #ifndef CONFIG_PLATFORM_SITL
         ledseqRun(&seq_testFailed);
-        #endif
         vTaskDelay(M2T(2000));
         // System can be forced to start by setting the param to 1 from the cfclient
         if (selftestPassed)
@@ -350,10 +346,8 @@ void systemTask(void *arg)
     }
     else
     {
-      #ifndef CONFIG_PLATFORM_SITL
       ledInit();
       ledSet(SYS_LED, true);
-      #endif
     }
   }
   #ifndef CONFIG_PLATFORM_SITL

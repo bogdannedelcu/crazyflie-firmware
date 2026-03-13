@@ -32,6 +32,7 @@
 #define LED_POL_POS 0
 #define LED_POL_NEG 1
 
+#ifndef CONFIG_PLATFORM_SITL
 //Hardware configuration
 #define LED_GPIO_PERIF   (RCC_AHB1Periph_GPIOC | RCC_AHB1Periph_GPIOD)
 #define LED_GPIO_PORT_BLUE  GPIOD
@@ -46,6 +47,7 @@
 #define LED_POL_GREEN_R  LED_POL_NEG
 #define LED_GPIO_RED_R   GPIO_Pin_3
 #define LED_POL_RED_R    LED_POL_NEG
+#endif
 
 #define LINK_LED         LED_GREEN_L
 #define CHG_LED          LED_BLUE_L

@@ -87,6 +87,7 @@ set (CF2_SITL_INCLUDE_DIRS
   ${FREERTOS_SRC_DIR}/portable/ThirdParty/GCC/Posix
   ${FREERTOS_SRC_DIR}/portable/ThirdParty/GCC/Posix/utils
   ${CF2_SITL_SRCS_DIR}/config
+  ${CF2_SITL_SRCS_DIR}/drivers/interface
   #${CF2_SITL_SRCS_DIR}/deck/interface
   #${CF2_SITL_SRCS_DIR}/deck/drivers/interface
   ${CF2_SITL_SRCS_DIR}/hal/interface
@@ -128,6 +129,11 @@ set(SRCS
   # SITL deck stub (exposes deck parameters for cfclient)
   ${CF2_SITL_SRCS_DIR}/deck/drivers/src/deck_sitl.c
 
+  #LED SITL stubs
+  ${CF2_SITL_SRCS_DIR}/drivers/src/led_sitl.c
+  ${CF2_SITL_SRCS_DIR}/hal/src/ledseq.c
+  ${CF2_SITL_SRCS_DIR}/deck/drivers/src/ledring_sitl.c
+
   #Communication
   ${CF2_SITL_SRCS_DIR}/hal/src/socketlink.c
   ${CF2_SITL_SRCS_DIR}/modules/src/crtp.c
@@ -135,6 +141,9 @@ set(SRCS
   #sensors
   ${CF2_SITL_SRCS_DIR}/hal/src/sensors_sitl.c
   ${CF2_SITL_SRCS_DIR}/hal/src/sensors.c
+
+  #Range
+  ${CF2_SITL_SRCS_DIR}/modules/src/range.c
 
   #Modules
   ${CF2_SITL_SRCS_DIR}/modules/src/system.c

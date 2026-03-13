@@ -49,7 +49,7 @@
  * end up in the CCM. The current implementation puts is in CCM but
  * that might change later.
  */
-#if defined(UNIT_TEST_MODE)
+#if defined(UNIT_TEST_MODE) || defined(CONFIG_PLATFORM_SITL)
   #define NO_DMA_CCM_SAFE_ZERO_INIT
 #else
   #define NO_DMA_CCM_SAFE_ZERO_INIT __attribute__((section(".ccmbss")))

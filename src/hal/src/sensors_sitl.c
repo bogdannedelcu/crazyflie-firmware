@@ -39,6 +39,7 @@
 #include "log.h"
 
 #include "crtp.h"
+#include "range.h"
 
 #include <math.h>
 
@@ -69,6 +70,7 @@ enum SensorTypeSim_e {
   SENSOR_GYRO_ACC_SIM           = 0,
   SENSOR_MAG_SIM                = 1,
   SENSOR_BARO_SIM               = 2,
+  SENSOR_RANGE_SIM              = 3,
 };
 
 typedef struct
@@ -121,6 +123,7 @@ float sinRoll;
 static void processAccGyroMeasurements(const uint8_t *buffer);
 static void processMagnetometerMeasurements(const uint8_t *buffer);
 static void processBarometerMeasurements(const uint8_t *buffer);
+static void processRangeMeasurements(const uint8_t *buffer);
 
 #ifdef GYRO_GYRO_BIAS_LIGHT_WEIGHT
 static bool processGyroBiasNoBuffer(int16_t gx, int16_t gy, int16_t gz, Axis3f *gyroBiasOut);
@@ -210,6 +213,9 @@ static void sensorsTask(void *param)
         // estimatorEnqueue(&measurement);
         xQueueOverwrite(barometerDataQueue, &sensors.baro);
         break;
+      case SENSOR_RANGE_SIM:
+        processRangeMeasurements(&(p.data[1]));
+        break;
       default :
         break;
     }
@@ -237,6 +243,17 @@ void processBarometerMeasurements(const uint8_t *buffer)
   sensors.baro.pressure = baroData->pressure;
   sensors.baro.temperature = baroData->temperature;
   sensors.baro.asl = baroData->asl;
+}
+
+void processRangeMeasurements(const uint8_t *buffer)
+{
+  // buffer layout: 5 x float32 (front, back, left, right, up) in meters
+  const float *ranges = (const float *)buffer;
+  rangeSet(rangeFront, ranges[0]);
+  rangeSet(rangeBack,  ranges[1]);
+  rangeSet(rangeLeft,  ranges[2]);
+  rangeSet(rangeRight, ranges[3]);
+  rangeSet(rangeUp,    ranges[4]);
 }
 
 void processMagnetometerMeasurements(const uint8_t *buffer)
@@ -326,6 +343,16 @@ void sensorsSimInit(void)
   sensorsBiasObjInit(&gyroBiasRunning);
   sensorsDeviceInit();
   sensorsTaskInit();
+
+  // Initialize ranges to max so LOG reads don't return 0mm before
+  // the first range packet arrives from the simulator.  Without this,
+  // cflib scripts may see 0-valued ranges and trigger safety checks
+  // (e.g. "top_range < 0.2" in wall-following examples).
+  rangeSet(rangeFront, 4.0f);
+  rangeSet(rangeBack,  4.0f);
+  rangeSet(rangeLeft,  4.0f);
+  rangeSet(rangeRight, 4.0f);
+  rangeSet(rangeUp,    4.0f);
 
   isInit = true;
 }
