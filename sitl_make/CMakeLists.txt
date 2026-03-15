@@ -132,7 +132,7 @@ set(SRCS
   #LED SITL stubs
   ${CF2_SITL_SRCS_DIR}/drivers/src/led_sitl.c
   ${CF2_SITL_SRCS_DIR}/hal/src/ledseq.c
-  ${CF2_SITL_SRCS_DIR}/deck/drivers/src/ledring_sitl.c
+  ${CF2_SITL_SRCS_DIR}/deck/drivers/src/colorled_sitl.c
 
   #Communication
   ${CF2_SITL_SRCS_DIR}/hal/src/socketlink.c
