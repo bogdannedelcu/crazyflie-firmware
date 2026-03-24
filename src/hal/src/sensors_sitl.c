@@ -42,6 +42,12 @@
 #include "range.h"
 
 #include <math.h>
+#include <string.h>
+
+// Battery voltage variables from pm_sitl.c
+extern float simBatteryVoltage;
+extern uint16_t simBatteryVoltageMV;
+extern int8_t simPmState;
 
 // We try to be as close as possible from the real sensor implementation
 #define MAG_GAUSS_PER_LSB                                 666.7f
@@ -71,6 +77,7 @@ enum SensorTypeSim_e {
   SENSOR_MAG_SIM                = 1,
   SENSOR_BARO_SIM               = 2,
   SENSOR_RANGE_SIM              = 3,
+  SENSOR_BATT_SIM               = 4,
 };
 
 typedef struct
@@ -216,6 +223,15 @@ static void sensorsTask(void *param)
       case SENSOR_RANGE_SIM:
         processRangeMeasurements(&(p.data[1]));
         break;
+      case SENSOR_BATT_SIM:
+      {
+        float voltage;
+        memcpy(&voltage, &p.data[1], sizeof(float));
+        simBatteryVoltage = voltage;
+        simBatteryVoltageMV = (uint16_t)(voltage * 1000.0f);
+        simPmState = (voltage < 3.0f) ? 3 : 0;
+        break;
+      }
       default :
         break;
     }
