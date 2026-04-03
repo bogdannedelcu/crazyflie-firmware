@@ -33,6 +33,8 @@
 #endif
 
 #include "estimator.h"
+#include "range.h"
+#include "stabilizer_types.h"
 #include "configblock.h"
 #include "filter.h"
 #include "param.h"
@@ -78,6 +80,8 @@ enum SensorTypeSim_e {
   SENSOR_BARO_SIM               = 2,
   SENSOR_RANGE_SIM              = 3,
   SENSOR_BATT_SIM               = 4,
+  SENSOR_TOF_SIM                = 5,
+  SENSOR_FLOW_SIM               = 6,
 };
 
 typedef struct
@@ -223,6 +227,35 @@ static void sensorsTask(void *param)
       case SENSOR_RANGE_SIM:
         processRangeMeasurements(&(p.data[1]));
         break;
+      case SENSOR_TOF_SIM:
+      {
+        float distance;
+        memcpy(&distance, &p.data[1], sizeof(float));
+        rangeSet(rangeDown, distance);
+        if (distance > 0.01f && distance < 5.0f) {
+          // Exponential noise model matching VL53L1x (zranger2.c)
+          static const float expPointA = 2.5f;
+          static const float expStdA   = 0.0025f;
+          static const float expPointB = 4.0f;
+          static const float expStdB   = 0.2f;
+          static const float expCoeff  = 2.9214f; // ln(expStdB/expStdA) / (expPointB - expPointA)
+          float stdDev = expStdA * (1.0f + expf(expCoeff * (distance - expPointA)));
+          rangeEnqueueDownRangeInEstimator(distance, stdDev, xTaskGetTickCount());
+        }
+        break;
+      }
+      case SENSOR_FLOW_SIM:
+      {
+        flowMeasurement_t flowData;
+        memcpy(&flowData.dpixelx, &p.data[1], sizeof(float));
+        memcpy(&flowData.dpixely, &p.data[5], sizeof(float));
+        flowData.stdDevX = 2.0f;  // matches PMW3901 flowdeck driver default
+        flowData.stdDevY = 2.0f;
+        flowData.dt = 0.01f;
+        memcpy(&flowData.dt, &p.data[9], sizeof(float));
+        estimatorEnqueueFlow(&flowData);
+        break;
+      }
       case SENSOR_BATT_SIM:
       {
         float voltage;

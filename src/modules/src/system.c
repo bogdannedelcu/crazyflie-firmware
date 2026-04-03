@@ -221,6 +221,9 @@ void systemTask(void *arg)
   #ifndef CONFIG_PLATFORM_SITL
   deckInit();
   estimator = deckGetRequiredEstimator();
+  #else
+  // SITL: no deck driver, use CMake ESTIMATOR setting as initial default
+  estimator = ESTIMATOR;
   #endif
   stabilizerInit(estimator);
   #ifndef CONFIG_PLATFORM_SITL

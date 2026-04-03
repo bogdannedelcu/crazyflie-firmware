@@ -246,7 +246,7 @@ add_executable(cf2 ${SRCS})
 
 target_link_libraries(cf2 ${CMAKE_THREAD_LIBS_INIT} m)
 
-target_compile_options(cf2 PUBLIC -DCONFIG_DECK_FORCE -DCONFIG_ESTIMATOR_KALMAN -DCONFIG_ESTIMATOR_KALMAN_ENABLE -DCRAZYFLIE_FW -DCONFIG_PLATFORM_SITL -DARCH_64)
+target_compile_options(cf2 PUBLIC -DCONFIG_DECK_FORCE -DCONFIG_ESTIMATOR_KALMAN_ENABLE -DCONFIG_ESTIMATOR_UKF_ENABLE -DCRAZYFLIE_FW -DCONFIG_PLATFORM_SITL -DARCH_64)
 target_compile_definitions(cf2 PUBLIC CONFIG_PLATFORM_SITL)
 
 # Check if linker supports --no-warn-rwx-segments (added in binutils 2.39)
