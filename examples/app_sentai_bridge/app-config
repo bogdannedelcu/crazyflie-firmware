@@ -1,0 +1,54 @@
+# Platform: Crazyflie 2.1 BRUSHLESS.
+CONFIG_PLATFORM_CF21BL=y
+CONFIG_MOTORS_REQUIRE_ARMING=y
+CONFIG_MOTORS_ESC_PROTOCOL_DSHOT=y
+
+# We use a deck driver (sentai_deck.c), NOT an app.
+# Deck drivers initialize during deck-core boot — high-priority, well
+# before user-task scheduling — and CRTP port callbacks run in the
+# CRTP RX task itself. No appMain involvement, no Appchannel polling.
+CONFIG_APP_ENABLE=n
+
+# Force-load the "sentai" deck driver — our SentAI board has no 1-wire
+# memory, so deck-core would skip it without this hint.
+CONFIG_DECK_FORCE="sentai"
+
+# We DO NOT load cpx-host-on-uart2 — our deck driver writes UART2 raw,
+# no CPX, no flow-control state machine. Avoids the CTS/CTR deadlocks
+# we hit on the previous design.
+# CONFIG_DECK_CPX_HOST_ON_UART2=n  (default)
+
+# Sensors — explicit (PLATFORM_CF21BL already selects these).
+CONFIG_SENSORS_BMI088_BMP3XX=y
+CONFIG_SENSORS_MPU9250_LPS25H=y
+
+# Estimator + controller (Kalman EKF + PID with baro Z-hold).
+CONFIG_ESTIMATOR_KALMAN_ENABLE=y
+CONFIG_ESTIMATOR_AUTO_SELECT=y
+CONFIG_CONTROLLER_PID=y
+CONFIG_CONTROLLER_PID_FILTER_ALL=y
+CONFIG_CONTROLLER_PID_IMPROVED_BARO_Z_HOLD=y
+
+# --- Disable unused deck drivers (saves CCM/RAM/flash). ---
+CONFIG_DECK_AI=n
+CONFIG_DECK_LIGHTHOUSE=n
+CONFIG_DECK_LOCODECK=n
+CONFIG_DECK_FLOW=n
+CONFIG_DECK_ZRANGER2=n
+CONFIG_DECK_MULTIRANGER=n
+CONFIG_DECK_LEDRING=n
+CONFIG_DECK_BUZZ=n
+CONFIG_DECK_USD=n
+CONFIG_DECK_OA=n
+CONFIG_DECK_RPM=n
+CONFIG_DECK_ACTIVE_MARKER=n
+CONFIG_DECK_LEDCOLOR=n
+CONFIG_DECK_GTGPS=n
+
+# Estimators / controllers we don't use.
+CONFIG_ESTIMATOR_UKF_ENABLE=n
+CONFIG_ESTIMATOR_KALMAN_TDOA_OUTLIERFILTER_FALLBACK=n
+CONFIG_CONTROLLER_INDI=n
+CONFIG_CONTROLLER_MELLINGER=n
+CONFIG_CONTROLLER_BRESCIANINI=n
+CONFIG_CONTROLLER_LEE=n
