@@ -77,6 +77,20 @@ bool uart2Test(void);
 void uart2SendData(uint32_t size, uint8_t* data);
 
 /**
+ * Bounded-timeout variant of uart2SendData. Returns true on success,
+ * false on timeout. Use this from any context where blocking the
+ * caller forever (e.g. on a hardware glitch leaving TX_DONE
+ * un-asserted) would wedge a critical task — the SentAI deck driver
+ * calls this from the high-priority CRTP RX task path.
+ * @param[in] size        Number of bytes to send
+ * @param[in] data        Pointer to data (must remain valid until return)
+ * @param[in] timeout_ms  Maximum wait for TX completion
+ * @return true on success, false on timeout (TX aborted, peripheral
+ *         left in a clean state for the next caller)
+ */
+bool uart2SendDataBounded(uint32_t size, uint8_t* data, uint32_t timeout_ms);
+
+/**
  * Sends raw data using DMA transfer.
  * @param[in] size  Number of bytes to send
  * @param[in] data  Pointer to data

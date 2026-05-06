@@ -200,6 +200,47 @@ void uart2SendData(uint32_t size, uint8_t* data)
 
 }
 
+/* Bounded-timeout variant of uart2SendData. Returns true on success,
+ * false on timeout (TX_DONE never asserted within timeout_ms). On
+ * timeout we cleanly abort: disable the TXE interrupt and null out
+ * txBuffer so the ISR doesn't keep feeding a freed/stack frame on
+ * the next interrupt. The UART hardware FIFO may still drain a few
+ * already-clocked-in bytes after we return — that's expected; next
+ * caller's USART_ITConfig(TXE, ENABLE) will trigger fresh transmission
+ * once the data register is empty again.
+ *
+ * Added 2026-05-06 for the SentAI deck driver, which calls this from
+ * the high-priority CRTP RX task — a hardware glitch leaving TX_DONE
+ * un-asserted would otherwise wedge the entire CRTP rx pipeline. */
+bool uart2SendDataBounded(uint32_t size, uint8_t* data, uint32_t timeout_ms)
+{
+  if (!isInit)
+    return false;
+
+  txIdx = 0;
+  txSize = size;
+  txBuffer = data;
+
+  USART_ITConfig(UART2_TYPE, USART_IT_TXE, ENABLE);
+
+  EventBits_t got = xEventGroupWaitBits(isrEvents,
+                                        TX_DONE,
+                                        pdTRUE,  // Clear before returning
+                                        pdTRUE,  // Wait for all bits
+                                        pdMS_TO_TICKS(timeout_ms));
+
+  if ((got & TX_DONE) != 0) {
+    return true;
+  }
+
+  /* Abort path: disable TXE so the ISR stops, scrub the shared
+   * pointer so a stale frame can't be re-sent. The next caller starts
+   * fresh. */
+  USART_ITConfig(UART2_TYPE, USART_IT_TXE, DISABLE);
+  txBuffer = 0;
+  return false;
+}
+
 void uart2SendDataDmaBlocking(uint32_t size, uint8_t* data)
 {
 #ifdef CONFIG_MOTORS_ESC_PROTOCOL_DSHOT

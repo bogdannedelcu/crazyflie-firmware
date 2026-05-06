@@ -135,6 +135,19 @@ static uint32_t s_flow_rejected         = 0;
 static uint32_t s_unknown_channel       = 0;
 static uint32_t s_telem_queries         = 0;
 static uint32_t s_telem_unknown_cmd     = 0;
+static uint32_t s_uart_tx_timeout       = 0;  /* uart2SendDataBounded gave up */
+
+/* Bounded UART2 TX timeout. Worst case for a 30-byte CRTP frame at
+ * 576 000 baud is 30 * 10/576000 ≈ 520 µs of actual wire time, plus
+ * ISR scheduling jitter (few µs). 50 ms is 100× headroom — enough to
+ * absorb a transient stall but short enough that a hard hardware
+ * wedge (TX_DONE never asserts) doesn't lock the high-priority CRTP
+ * RX task: it returns, increments s_uart_tx_timeout, and continues
+ * dispatching subsequent radio packets.
+ *
+ * Was unbounded portMAX_DELAY before — empirically that wedge was
+ * the failure mode that cost most of the 2026-05-06 session. */
+#define UART_TX_TIMEOUT_MS 50
 
 /* ------------------------------------------------------------------ */
 /*  Telemetry helpers.                                                */
@@ -213,7 +226,14 @@ static void telem_reply(uint8_t cmd, float value) {
     for (uint8_t i = 0; i < idx; ++i) crc ^= frame[i];
     frame[idx++] = crc;
 
-    uart2SendData(idx, frame);
+    /* Bounded TX — board side has its own timeout (default 200 ms) on
+     * the response semaphore, so we don't need to wait longer than
+     * the wire would take anyway. On timeout the board sees -4 and
+     * returns the fallback (-999.0 / NaN) — preferable to wedging the
+     * uart_rx_task. */
+    if (!uart2SendDataBounded(idx, frame, UART_TX_TIMEOUT_MS)) {
+        s_uart_tx_timeout++;
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -241,8 +261,14 @@ static void on_radio_packet(CRTPPacket *pk) {
     for (uint8_t i = 0; i < idx; ++i) crc ^= frame[i];
     frame[idx++] = crc;
 
-    uart2SendData(idx, frame);
-    s_radio_to_uart_pkts++;
+    if (uart2SendDataBounded(idx, frame, UART_TX_TIMEOUT_MS)) {
+        s_radio_to_uart_pkts++;
+    } else {
+        s_uart_tx_timeout++;
+        /* Don't increment R2U on timeout — the counter is meant to
+         * reflect bytes that actually left the wire. CRTP RX task
+         * returns cleanly to dispatch the next packet. */
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -441,4 +467,5 @@ PARAM_ADD_CORE(PARAM_UINT32 | PARAM_RONLY, sentaiUcrc,   &s_uart_crc_errors)
 PARAM_ADD_CORE(PARAM_UINT32 | PARAM_RONLY, sentaiUbad,   &s_uart_bad_len)
 PARAM_ADD_CORE(PARAM_UINT32 | PARAM_RONLY, sentaiTelem,  &s_telem_queries)
 PARAM_ADD_CORE(PARAM_UINT32 | PARAM_RONLY, sentaiTelBad, &s_telem_unknown_cmd)
+PARAM_ADD_CORE(PARAM_UINT32 | PARAM_RONLY, sentaiTxTo,   &s_uart_tx_timeout)
 PARAM_GROUP_STOP(deck)
