@@ -58,6 +58,24 @@
 #define DEBUG_MODULE "SENTAI"
 #include "debug.h"
 
+/* Build-time guard: this deck driver assumes EXCLUSIVE ownership of
+ * UART2. CPX_UART_TRANSPORT (compiled when ENABLE_CPX is on) calls
+ * uart2SendData() and reads from rxStream too — both writers race for
+ * the static txBuffer/txIdx/txSize globals in uart2.c, the second TX
+ * clobbers the first's in-flight state, TX_DONE never fires for our
+ * deck, on_radio_packet wedges in xEventGroupWaitBits, the entire
+ * CRTP RX task stalls. Empirically validated 2026-05-06 — the fix
+ * was `CONFIG_ENABLE_CPX=n` in app-config. Don't undo it without
+ * deeper refactor (e.g. dedicated TX queue/task). */
+#if defined(CONFIG_ENABLE_CPX) && CONFIG_ENABLE_CPX
+#error "ENABLE_CPX must be 'n' for this deck driver — see app-config note"
+#endif
+
+/* Wire format on UART2 channel 2 carries float32 little-endian.
+ * Both ends are Cortex-M (LE) so direct memcpy works; assert it. */
+_Static_assert(__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__,
+               "telem float wire format assumes Cortex-M LE byte order");
+
 #define LINK_PORT       0x0E
 #define WIRE_START      0xAAu
 #define UART_BAUDRATE   576000u
@@ -119,10 +137,34 @@ static uint32_t s_telem_queries         = 0;
 static uint32_t s_telem_unknown_cmd     = 0;
 
 /* ------------------------------------------------------------------ */
-/*  Telemetry helper: resolve drone log var → float on demand.        */
-/*  IDs are cached after first lookup. Returns NaN for unknown cmd or */
-/*  unresolved log var (Bitcraze uses int16 LOG_NAME_NOT_FOUND = -1). */
+/*  Telemetry helpers.                                                */
 /* ------------------------------------------------------------------ */
+
+/* Quiet-NaN bit pattern, IEEE-754 binary32. Returned for unknown cmd
+ * codes or unresolved drone log vars so the board side can detect
+ * "no real value here" without ambiguity (NaN compares unequal to
+ * itself). Builds via union — safe under -fstrict-aliasing. */
+static inline float nan_f(void) {
+    union { uint32_t u; float f; } w = { .u = 0x7FC00000u };
+    return w.f;
+}
+
+/* Resolve a Bitcraze log var ID lazily, caching only on SUCCESS. If
+ * the log subsystem hasn't fully initialized when the first query
+ * arrives at boot, an early failure used to permanently cache the
+ * not-found sentinel — every subsequent query returned NaN even
+ * after the var became available. Now we retry on each call until
+ * resolution succeeds (cheap: a hash-table lookup in log.c). */
+static logVarId_t telem_resolve(logVarId_t* cached_slot,
+                                const char* group, const char* name) {
+    if (*cached_slot != 0xFFFF) return *cached_slot;
+    logVarId_t id = logGetVarId(group, name);
+    if (id != 0xFFFF) *cached_slot = id;   /* cache only on success */
+    return id;
+}
+
+/* Resolve drone log var → float on demand. Returns NaN for unknown
+ * cmd or unresolved log var. */
 static float telem_read(uint8_t cmd) {
     static logVarId_t id_baro_asl    = 0xFFFF;
     static logVarId_t id_state_z     = 0xFFFF;
@@ -131,8 +173,7 @@ static float telem_read(uint8_t cmd) {
     static logVarId_t id_temp_c      = 0xFFFF;
     static logVarId_t id_pressure    = 0xFFFF;
 
-    logVarId_t* slot = NULL;
-    const char* group = NULL; const char* name = NULL;
+    logVarId_t* slot; const char* group; const char* name;
     switch (cmd) {
         case TELEM_BARO_ASL:    slot=&id_baro_asl;    group="baro";          name="asl";          break;
         case TELEM_STATE_Z:     slot=&id_state_z;     group="stateEstimate"; name="z";            break;
@@ -142,36 +183,37 @@ static float telem_read(uint8_t cmd) {
         case TELEM_PRESSURE:    slot=&id_pressure;    group="baro";          name="pressure";     break;
         default:
             s_telem_unknown_cmd++;
-            { float nan = 0.0f; uint32_t x = 0x7FC00000u; memcpy(&nan,&x,4); return nan; }
+            return nan_f();
     }
-    if (*slot == 0xFFFF) {
-        *slot = logGetVarId(group, name);
-    }
-    if (*slot == 0xFFFF) {
-        float nan = 0.0f; uint32_t x = 0x7FC00000u; memcpy(&nan,&x,4); return nan;
-    }
-    return logGetFloat(*slot);
+    logVarId_t id = telem_resolve(slot, group, name);
+    if (id == 0xFFFF) return nan_f();
+    return logGetFloat(id);
 }
 
-/* Build + send a [cmd_echo][float32] reply on CH_TELEM. */
+/* Build + send a [cmd_echo][float32 LE] reply on CH_TELEM. The
+ * counter is bumped *before* uart2SendData so a wedged TX still
+ * shows up in the stat as "attempted" — cleaner than the earlier
+ * post-send increment which conflated "called" with "delivered".
+ * For "delivered" diagnostics we'd need a TX-completion hook from
+ * the bounded-uart2SendData refactor (TODO). */
 static void telem_reply(uint8_t cmd, float value) {
-    uint8_t body[5];
-    body[0] = cmd;
-    memcpy(&body[1], &value, 4);    /* little-endian on Cortex-M */
+    s_telem_queries++;
 
-    uint8_t frame[1 + 1 + 1 + 5 + 1];
+    union { float f; uint32_t u; } w = { .f = value };
+
+    uint8_t frame[1 + 1 + 1 + 5 + 1];   /* AA LEN CH cmd float32 CRC */
     uint8_t idx = 0;
     frame[idx++] = WIRE_START;
     frame[idx++] = (uint8_t)(1 + 5);    /* CH + body = 6 */
     frame[idx++] = CH_TELEM;
-    memcpy(&frame[idx], body, 5);
-    idx = (uint8_t)(idx + 5);
+    frame[idx++] = cmd;                 /* cmd echo */
+    memcpy(&frame[idx], &w.u, 4);       /* float32 LE */
+    idx = (uint8_t)(idx + 4);
     uint8_t crc = 0;
     for (uint8_t i = 0; i < idx; ++i) crc ^= frame[i];
     frame[idx++] = crc;
 
     uart2SendData(idx, frame);
-    s_telem_queries++;
 }
 
 /* ------------------------------------------------------------------ */
@@ -336,11 +378,17 @@ static void uart_rx_task(void *param) {
                         }
                     }
                 } else if (channel == CH_TELEM) {
-                    /* Single-byte cmd, drone replies with [cmd][float32]. */
-                    if (dataLen >= 1) {
+                    /* Single-byte cmd request, drone replies with
+                     * [cmd][float32]. Tighten to exact length (1) so
+                     * future protocol additions don't silently mask
+                     * malformed queries; bump unknown-cmd counter on
+                     * mismatch to make it observable. */
+                    if (dataLen == 1) {
                         uint8_t cmd = frame_buf[1];
                         float v = telem_read(cmd);
                         telem_reply(cmd, v);
+                    } else {
+                        s_telem_unknown_cmd++;
                     }
                 } else {
                     s_unknown_channel++;
