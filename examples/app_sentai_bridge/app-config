@@ -18,6 +18,18 @@ CONFIG_DECK_FORCE="sentai"
 # we hit on the previous design.
 # CONFIG_DECK_CPX_HOST_ON_UART2=n  (default)
 
+# CRITICAL: ENABLE_CPX defaults to `y` upstream and selects
+# ENABLE_CPX_ON_UART2. The CPX UART transport (cpx_uart_transport.c)
+# then races our deck driver for the SAME UART2 hardware:
+#   - both call uart2SendData(), mutating shared static
+#     txBuffer/txIdx/txSize globals → second TX corrupts in-flight
+#   - both pull bytes from the shared rxStream → bytes split between
+#     unrelated state machines
+# Symptom: drone callback fires (R2U increments) but bytes stop
+# arriving at the board after a few sends — TX peripheral wedges.
+# Our deck owns UART2 exclusively; disable the whole CPX subsystem.
+CONFIG_ENABLE_CPX=n
+
 # Sensors — explicit (PLATFORM_CF21BL already selects these).
 CONFIG_SENSORS_BMI088_BMP3XX=y
 CONFIG_SENSORS_MPU9250_LPS25H=y

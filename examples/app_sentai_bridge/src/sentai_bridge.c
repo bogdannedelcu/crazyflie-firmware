@@ -53,6 +53,7 @@
 #include "system.h"
 #include "estimator.h"
 #include "stabilizer_types.h"
+#include "log.h"
 
 #define DEBUG_MODULE "SENTAI"
 #include "debug.h"
@@ -71,11 +72,26 @@
  *   CH=1  Optical-flow measurement (board → drone only). Binary
  *         flow_pkt_t (16 bytes), consumed locally by the drone's EKF
  *         via estimatorEnqueueFlow(). Never forwarded to the radio.
- *   CH=2  reserved
+ *   CH=2  Drone telemetry query (board ↔ drone). Single-byte cmd
+ *         from board, drone replies with [cmd][float32]. See the
+ *         telemetry-cmd table below for cmd codes. Cached log var
+ *         IDs are resolved on first call so repeated queries are
+ *         O(1) lookups in the log subsystem.
  *   CH=3  reserved
  */
 #define CH_REPL    0u
 #define CH_FLOW    1u
+#define CH_TELEM   2u
+
+/* Telemetry commands (channel 2). Reply on the same channel is always
+ * `[cmd_echo:1][float32:4]` little-endian on the wire. Unknown cmds
+ * reply with NaN so the board can flag them. */
+#define TELEM_BARO_ASL     0x01u  /* baro.asl       — barometric altitude (m) */
+#define TELEM_STATE_Z      0x02u  /* stateEstimate.z — fused altitude  (m)    */
+#define TELEM_BATTERY_V    0x03u  /* pm.vbat         — battery voltage  (V)   */
+#define TELEM_BATTERY_PCT  0x04u  /* pm.batteryLevel — battery level    (%)   */
+#define TELEM_TEMP_C       0x05u  /* baro.temp       — barometer temp   (°C)  */
+#define TELEM_PRESSURE     0x06u  /* baro.pressure   — pressure         (mbar)*/
 
 typedef struct __attribute__((packed)) {
     float dpx;     /* accumulated pixel motion x since last sample */
@@ -99,6 +115,64 @@ static uint32_t s_uart_radio_drops      = 0;
 static uint32_t s_flow_injected         = 0;
 static uint32_t s_flow_rejected         = 0;
 static uint32_t s_unknown_channel       = 0;
+static uint32_t s_telem_queries         = 0;
+static uint32_t s_telem_unknown_cmd     = 0;
+
+/* ------------------------------------------------------------------ */
+/*  Telemetry helper: resolve drone log var → float on demand.        */
+/*  IDs are cached after first lookup. Returns NaN for unknown cmd or */
+/*  unresolved log var (Bitcraze uses int16 LOG_NAME_NOT_FOUND = -1). */
+/* ------------------------------------------------------------------ */
+static float telem_read(uint8_t cmd) {
+    static logVarId_t id_baro_asl    = 0xFFFF;
+    static logVarId_t id_state_z     = 0xFFFF;
+    static logVarId_t id_battery_v   = 0xFFFF;
+    static logVarId_t id_battery_pct = 0xFFFF;
+    static logVarId_t id_temp_c      = 0xFFFF;
+    static logVarId_t id_pressure    = 0xFFFF;
+
+    logVarId_t* slot = NULL;
+    const char* group = NULL; const char* name = NULL;
+    switch (cmd) {
+        case TELEM_BARO_ASL:    slot=&id_baro_asl;    group="baro";          name="asl";          break;
+        case TELEM_STATE_Z:     slot=&id_state_z;     group="stateEstimate"; name="z";            break;
+        case TELEM_BATTERY_V:   slot=&id_battery_v;   group="pm";            name="vbat";         break;
+        case TELEM_BATTERY_PCT: slot=&id_battery_pct; group="pm";            name="batteryLevel"; break;
+        case TELEM_TEMP_C:      slot=&id_temp_c;      group="baro";          name="temp";         break;
+        case TELEM_PRESSURE:    slot=&id_pressure;    group="baro";          name="pressure";     break;
+        default:
+            s_telem_unknown_cmd++;
+            { float nan = 0.0f; uint32_t x = 0x7FC00000u; memcpy(&nan,&x,4); return nan; }
+    }
+    if (*slot == 0xFFFF) {
+        *slot = logGetVarId(group, name);
+    }
+    if (*slot == 0xFFFF) {
+        float nan = 0.0f; uint32_t x = 0x7FC00000u; memcpy(&nan,&x,4); return nan;
+    }
+    return logGetFloat(*slot);
+}
+
+/* Build + send a [cmd_echo][float32] reply on CH_TELEM. */
+static void telem_reply(uint8_t cmd, float value) {
+    uint8_t body[5];
+    body[0] = cmd;
+    memcpy(&body[1], &value, 4);    /* little-endian on Cortex-M */
+
+    uint8_t frame[1 + 1 + 1 + 5 + 1];
+    uint8_t idx = 0;
+    frame[idx++] = WIRE_START;
+    frame[idx++] = (uint8_t)(1 + 5);    /* CH + body = 6 */
+    frame[idx++] = CH_TELEM;
+    memcpy(&frame[idx], body, 5);
+    idx = (uint8_t)(idx + 5);
+    uint8_t crc = 0;
+    for (uint8_t i = 0; i < idx; ++i) crc ^= frame[i];
+    frame[idx++] = crc;
+
+    uart2SendData(idx, frame);
+    s_telem_queries++;
+}
 
 /* ------------------------------------------------------------------ */
 /*  RADIO → UART  (CRTP RX task callback, runs at high priority)      */
@@ -261,6 +335,13 @@ static void uart_rx_task(void *param) {
                             s_flow_injected++;
                         }
                     }
+                } else if (channel == CH_TELEM) {
+                    /* Single-byte cmd, drone replies with [cmd][float32]. */
+                    if (dataLen >= 1) {
+                        uint8_t cmd = frame_buf[1];
+                        float v = telem_read(cmd);
+                        telem_reply(cmd, v);
+                    }
                 } else {
                     s_unknown_channel++;
                 }
@@ -310,4 +391,6 @@ PARAM_ADD_CORE(PARAM_UINT32 | PARAM_RONLY, sentaiU2R,    &s_uart_to_radio_pkts)
 PARAM_ADD_CORE(PARAM_UINT32 | PARAM_RONLY, sentaiU2Rdrp, &s_uart_radio_drops)
 PARAM_ADD_CORE(PARAM_UINT32 | PARAM_RONLY, sentaiUcrc,   &s_uart_crc_errors)
 PARAM_ADD_CORE(PARAM_UINT32 | PARAM_RONLY, sentaiUbad,   &s_uart_bad_len)
+PARAM_ADD_CORE(PARAM_UINT32 | PARAM_RONLY, sentaiTelem,  &s_telem_queries)
+PARAM_ADD_CORE(PARAM_UINT32 | PARAM_RONLY, sentaiTelBad, &s_telem_unknown_cmd)
 PARAM_GROUP_STOP(deck)
