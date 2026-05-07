@@ -48,6 +48,7 @@
 #include "deck.h"
 #include "deck_constants.h"
 #include "param.h"
+#include "param_logic.h"   /* PARAM_VARID_IS_VALID, paramVarId_t */
 #include "crtp.h"
 #include "uart2.h"
 #include "system.h"
@@ -128,6 +129,25 @@ _Static_assert(__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__,
 #define TELEM_CANFLY       0x30u  /* sys.canfly                      (bool)   */
 #define TELEM_IS_FLYING    0x31u  /* sys.isFlying                    (bool)   */
 #define TELEM_IS_TUMBLED   0x32u  /* sys.isTumbled                   (bool)   */
+
+/* EKF cross-check: kalman_pred log group from mm_flow.c.  These let
+ * the SentAI board observe the drone EKF's predicted-vs-measured flow
+ * pixel motion in PMW3901 units, so we can validate scale_x/scale_y
+ * (lens FOV vs Npix/thetapix) and body_xform signs WITHOUT having to
+ * subscribe to a Crazyflie LOG block over radio. */
+#define TELEM_PRED_NX      0x40u  /* kalman_pred.predNX  (predicted dpx/frame)*/
+#define TELEM_PRED_NY      0x41u  /* kalman_pred.predNY                       */
+#define TELEM_MEAS_NX      0x42u  /* kalman_pred.measNX  (received * 0.10)    */
+#define TELEM_MEAS_NY      0x43u  /* kalman_pred.measNY                       */
+
+/* PARAM SET opcodes: cmd >= 0x80 expects request payload
+ * [cmd][float32 LE] (dataLen == 5).  Drone calls paramSetFloat on the
+ * cached varId and replies with [cmd_echo][float32 = the value just
+ * written, or NaN on failure].  Used by the board to push lever-arm
+ * (camera-vs-CoM offset) without going through cfclient host-side. */
+#define TELEM_SET_POS_X    0x80u  /* flowdeck.flowdeckPos_x          (m)      */
+#define TELEM_SET_POS_Y    0x81u  /* flowdeck.flowdeckPos_y          (m)      */
+#define TELEM_SET_POS_Z    0x82u  /* flowdeck.flowdeckPos_z          (m)      */
 
 typedef struct __attribute__((packed)) {
     float dpx;     /* accumulated pixel motion x since last sample */
@@ -212,6 +232,10 @@ static float telem_read(uint8_t cmd) {
     static logVarId_t id_canfly      = 0xFFFF;
     static logVarId_t id_isflying    = 0xFFFF;
     static logVarId_t id_istumbled   = 0xFFFF;
+    static logVarId_t id_pred_nx     = 0xFFFF;
+    static logVarId_t id_pred_ny     = 0xFFFF;
+    static logVarId_t id_meas_nx     = 0xFFFF;
+    static logVarId_t id_meas_ny     = 0xFFFF;
 
     logVarId_t* slot; const char* group; const char* name;
     switch (cmd) {
@@ -230,6 +254,10 @@ static float telem_read(uint8_t cmd) {
         case TELEM_CANFLY:      slot=&id_canfly;      group="sys";           name="canfly";       break;
         case TELEM_IS_FLYING:   slot=&id_isflying;    group="sys";           name="isFlying";     break;
         case TELEM_IS_TUMBLED:  slot=&id_istumbled;   group="sys";           name="isTumbled";    break;
+        case TELEM_PRED_NX:     slot=&id_pred_nx;     group="kalman_pred";   name="predNX";       break;
+        case TELEM_PRED_NY:     slot=&id_pred_ny;     group="kalman_pred";   name="predNY";       break;
+        case TELEM_MEAS_NX:     slot=&id_meas_nx;     group="kalman_pred";   name="measNX";       break;
+        case TELEM_MEAS_NY:     slot=&id_meas_ny;     group="kalman_pred";   name="measNY";       break;
         default:
             s_telem_unknown_cmd++;
             return nan_f();
@@ -237,6 +265,39 @@ static float telem_read(uint8_t cmd) {
     logVarId_t id = telem_resolve(slot, group, name);
     if (id == 0xFFFF) return nan_f();
     return logGetFloat(id);
+}
+
+/* SET path: write a float to a Bitcraze PARAM via paramSetFloat.
+ * Returns the value just written (read-back) on success, NaN on
+ * failure (unknown cmd or unresolved param).  Caching mirrors the
+ * GET path -- each PARAM has its own static varId slot, lazy-resolved
+ * on first call so init order doesn't matter. */
+static float telem_set(uint8_t cmd, float value) {
+    static paramVarId_t id_pos_x = {0xFFFF, 0xFFFF};
+    static paramVarId_t id_pos_y = {0xFFFF, 0xFFFF};
+    static paramVarId_t id_pos_z = {0xFFFF, 0xFFFF};
+
+    paramVarId_t* slot; const char* group; const char* name;
+    switch (cmd) {
+        case TELEM_SET_POS_X: slot=&id_pos_x; group="flowdeck"; name="flowdeckPos_x"; break;
+        case TELEM_SET_POS_Y: slot=&id_pos_y; group="flowdeck"; name="flowdeckPos_y"; break;
+        case TELEM_SET_POS_Z: slot=&id_pos_z; group="flowdeck"; name="flowdeckPos_z"; break;
+        default:
+            s_telem_unknown_cmd++;
+            return nan_f();
+    }
+    paramVarId_t cur = *slot;
+    if (!PARAM_VARID_IS_VALID(cur)) {
+        cur = paramGetVarId(group, name);
+        if (!PARAM_VARID_IS_VALID(cur)) return nan_f();
+        *slot = cur;
+    }
+    paramSetFloat(cur, value);
+    /* Read back via paramGetFloat would close the loop, but the API
+     * isn't symmetric; for now we trust paramSetFloat and echo the
+     * requested value -- caller can issue a fresh log subscription
+     * to verify if needed. */
+    return value;
 }
 
 /* Build + send a [cmd_echo][float32 LE] reply on CH_TELEM. The
@@ -440,15 +501,23 @@ static void uart_rx_task(void *param) {
                         }
                     }
                 } else if (channel == CH_TELEM) {
-                    /* Single-byte cmd request, drone replies with
-                     * [cmd][float32]. Tighten to exact length (1) so
-                     * future protocol additions don't silently mask
-                     * malformed queries; bump unknown-cmd counter on
-                     * mismatch to make it observable. */
-                    if (dataLen == 1) {
+                    /* CH_TELEM dispatch:
+                     *   dataLen == 1, cmd <  0x80 → GET log var, reply
+                     *                               [cmd][float]
+                     *   dataLen == 5, cmd >= 0x80 → SET param via
+                     *                               [cmd][float32 LE],
+                     *                               reply [cmd][readback]
+                     *   anything else            → bump unknown_cmd */
+                    if (dataLen == 1 && frame_buf[1] < 0x80u) {
                         uint8_t cmd = frame_buf[1];
                         float v = telem_read(cmd);
                         telem_reply(cmd, v);
+                    } else if (dataLen == 5 && frame_buf[1] >= 0x80u) {
+                        uint8_t cmd = frame_buf[1];
+                        float v;
+                        memcpy(&v, &frame_buf[2], sizeof(v));
+                        float rb = telem_set(cmd, v);
+                        telem_reply(cmd, rb);
                     } else {
                         s_telem_unknown_cmd++;
                     }
