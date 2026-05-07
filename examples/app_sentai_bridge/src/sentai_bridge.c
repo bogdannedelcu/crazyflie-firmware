@@ -103,13 +103,31 @@ _Static_assert(__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__,
 
 /* Telemetry commands (channel 2). Reply on the same channel is always
  * `[cmd_echo:1][float32:4]` little-endian on the wire. Unknown cmds
- * reply with NaN so the board can flag them. */
+ * reply with NaN so the board can flag them.
+ *
+ * Booleans (canfly/isFlying/isTumbled) are read via logGetFloat which
+ * widens the underlying uint8_t to float — board interprets value !=
+ * 0.0 as true. Multi-axis state (attitude, velocity) uses one cmd
+ * code per axis to keep the wire single-frame; clients can issue
+ * three queries in sequence, ~1.5 ms each on UART. */
 #define TELEM_BARO_ASL     0x01u  /* baro.asl       — barometric altitude (m) */
 #define TELEM_STATE_Z      0x02u  /* stateEstimate.z — fused altitude  (m)    */
 #define TELEM_BATTERY_V    0x03u  /* pm.vbat         — battery voltage  (V)   */
 #define TELEM_BATTERY_PCT  0x04u  /* pm.batteryLevel — battery level    (%)   */
 #define TELEM_TEMP_C       0x05u  /* baro.temp       — barometer temp   (°C)  */
 #define TELEM_PRESSURE     0x06u  /* baro.pressure   — pressure         (mbar)*/
+/* Attitude (Euler, degrees, fused EKF output) */
+#define TELEM_ROLL         0x10u  /* stateEstimate.roll              (deg)    */
+#define TELEM_PITCH        0x11u  /* stateEstimate.pitch             (deg)    */
+#define TELEM_YAW          0x12u  /* stateEstimate.yaw               (deg)    */
+/* Velocity (world frame, m/s, fused EKF output) */
+#define TELEM_VX           0x20u  /* stateEstimate.vx                (m/s)    */
+#define TELEM_VY           0x21u  /* stateEstimate.vy                (m/s)    */
+#define TELEM_VZ           0x22u  /* stateEstimate.vz                (m/s)    */
+/* Supervisor / flight-state flags (read as float, value != 0 == true) */
+#define TELEM_CANFLY       0x30u  /* sys.canfly                      (bool)   */
+#define TELEM_IS_FLYING    0x31u  /* sys.isFlying                    (bool)   */
+#define TELEM_IS_TUMBLED   0x32u  /* sys.isTumbled                   (bool)   */
 
 typedef struct __attribute__((packed)) {
     float dpx;     /* accumulated pixel motion x since last sample */
@@ -185,6 +203,15 @@ static float telem_read(uint8_t cmd) {
     static logVarId_t id_battery_pct = 0xFFFF;
     static logVarId_t id_temp_c      = 0xFFFF;
     static logVarId_t id_pressure    = 0xFFFF;
+    static logVarId_t id_roll        = 0xFFFF;
+    static logVarId_t id_pitch       = 0xFFFF;
+    static logVarId_t id_yaw         = 0xFFFF;
+    static logVarId_t id_vx          = 0xFFFF;
+    static logVarId_t id_vy          = 0xFFFF;
+    static logVarId_t id_vz          = 0xFFFF;
+    static logVarId_t id_canfly      = 0xFFFF;
+    static logVarId_t id_isflying    = 0xFFFF;
+    static logVarId_t id_istumbled   = 0xFFFF;
 
     logVarId_t* slot; const char* group; const char* name;
     switch (cmd) {
@@ -194,6 +221,15 @@ static float telem_read(uint8_t cmd) {
         case TELEM_BATTERY_PCT: slot=&id_battery_pct; group="pm";            name="batteryLevel"; break;
         case TELEM_TEMP_C:      slot=&id_temp_c;      group="baro";          name="temp";         break;
         case TELEM_PRESSURE:    slot=&id_pressure;    group="baro";          name="pressure";     break;
+        case TELEM_ROLL:        slot=&id_roll;        group="stateEstimate"; name="roll";         break;
+        case TELEM_PITCH:       slot=&id_pitch;       group="stateEstimate"; name="pitch";        break;
+        case TELEM_YAW:         slot=&id_yaw;         group="stateEstimate"; name="yaw";          break;
+        case TELEM_VX:          slot=&id_vx;          group="stateEstimate"; name="vx";           break;
+        case TELEM_VY:          slot=&id_vy;          group="stateEstimate"; name="vy";           break;
+        case TELEM_VZ:          slot=&id_vz;          group="stateEstimate"; name="vz";           break;
+        case TELEM_CANFLY:      slot=&id_canfly;      group="sys";           name="canfly";       break;
+        case TELEM_IS_FLYING:   slot=&id_isflying;    group="sys";           name="isFlying";     break;
+        case TELEM_IS_TUMBLED:  slot=&id_istumbled;   group="sys";           name="isTumbled";    break;
         default:
             s_telem_unknown_cmd++;
             return nan_f();
