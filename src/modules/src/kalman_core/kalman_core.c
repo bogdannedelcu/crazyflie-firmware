@@ -328,9 +328,16 @@ void kalmanCoreUpdateWithBaro(kalmanCoreData_t *this, const kalmanCoreParams_t *
 
   h[KC_STATE_Z] = 1;
 
-  if (!quadIsFlying || this->baroReferenceHeight < 1) {
-    //TODO: maybe we could track the zero height as a state. Would be especially useful if UWB anchors had barometers.
+  if (this->baroReferenceHeight < 1) {
+    // Initial capture (after power-on or estimator reset)
     this->baroReferenceHeight = baroAsl;
+  } else if (!quadIsFlying) {
+    // On ground: refresh reference ONLY if baro is stable (no propwash transient).
+    // Prevents corrupting the baseline during motor spool-up, which is the bug
+    // that locks in a distorted reference at quadIsFlying false->true transition.
+    if (fabsf(baroAsl - this->baroReferenceHeight) < 0.5f) {
+      this->baroReferenceHeight = baroAsl;
+    }
   }
 
   float meas = (baroAsl - this->baroReferenceHeight);
