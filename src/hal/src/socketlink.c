@@ -74,6 +74,7 @@ static struct crtpLinkOperations socketlinkOp =
 
 static CRTPPacket p;
 static uint8_t socket_buff[33];
+static uint32_t dropped_packets_count = 0;
 
 static void socketlinkTask(void *param)
 {
@@ -92,12 +93,31 @@ static void socketlinkTask(void *param)
       recvlen = recvfrom(fd, p.raw, sizeof(p.raw), 0, (struct sockaddr *)&remaddr, &addrlen);
       if (recvlen > 0){
         p.size = recvlen - 1; // We remove the header size
-        // xQueueSend(crtpPacketDelivery, &p, 0);
-        ASSERT(xQueueSend(crtpPacketDelivery, &p, 0) == pdPASS);
+
+        // SENTAI fix 2026-05-10: replace ASSERT with graceful drop.
+        // The original ASSERT(xQueueSend(...) == pdPASS) called assertFail()
+        // -> portDISABLE_INTERRUPTS() which masks SIGALRM forever and
+        // deadlocks the POSIX-port FreeRTOS scheduler.  cf2 then appears
+        // "Ready to fly" (last log before deadlock) but is fully stuck
+        // in do_sig.  cflib opens link, no TOC, times out.
+        //
+        // Plugin sends ~1050 packets/s (IMU 1000Hz + baro 50Hz) which
+        // can fill the queue faster than sensorsTask drains it during
+        // the boot window before calibration completes.  Production
+        // firmware drops on overflow rather than crashing.  Bumping
+        // queue size only delays the issue under sustained pressure;
+        // drop+count is the durable fix.
+        if (xQueueSend(crtpPacketDelivery, &p, 0) != pdPASS) {
+          dropped_packets_count++;
+          if ((dropped_packets_count & 0xFF) == 0) {
+            DEBUG_PRINT("socketlink: dropped %u packets (queue full)\n",
+                        (unsigned) dropped_packets_count);
+          }
+        }
       } else {
         DEBUG_PRINT("error : %s \n" , strerror(errno));
       }
-    } 
+    }
   }
 
 }
