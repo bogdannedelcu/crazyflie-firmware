@@ -97,7 +97,7 @@
 #include "cfassert.h"
 
 
-// #define KALMAN_USE_BARO_UPDATE
+#define KALMAN_USE_BARO_UPDATE
 
 
 // Semaphore to signal that we got data from the stabilizer loop to process
