@@ -249,10 +249,24 @@ static void sensorsTask(void *param)
         flowMeasurement_t flowData;
         memcpy(&flowData.dpixelx, &p.data[1], sizeof(float));
         memcpy(&flowData.dpixely, &p.data[5], sizeof(float));
-        flowData.stdDevX = 2.0f;  // matches PMW3901 flowdeck driver default
-        flowData.stdDevY = 2.0f;
-        flowData.dt = 0.01f;
-        memcpy(&flowData.dt, &p.data[9], sizeof(float));
+        memcpy(&flowData.dt,      &p.data[9], sizeof(float));
+        // Extended packet (>=17 B body): sender supplies stdDev so it can
+        // throttle EKF trust based on its own conf-to-std mapping.  Older
+        // 13-byte packets fall back to the PMW3901 default of 2.0 px.
+        if (p.size >= 17) {
+            float std_in;
+            memcpy(&std_in, &p.data[13], sizeof(float));
+            if (std_in > 0.0f && std_in < 100.0f) {
+                flowData.stdDevX = std_in;
+                flowData.stdDevY = std_in;
+            } else {
+                flowData.stdDevX = 2.0f;
+                flowData.stdDevY = 2.0f;
+            }
+        } else {
+            flowData.stdDevX = 2.0f;
+            flowData.stdDevY = 2.0f;
+        }
         estimatorEnqueueFlow(&flowData);
         break;
       }
